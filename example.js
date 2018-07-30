@@ -18,7 +18,7 @@ sock.on('listening', function () {
   sock.send(Buffer.from('hello'), 0, 5, port, '127.0.0.1', function loop () {
     sock.send(Buffer.from('worlds'), 0, 6, port, 'localhost', function () {
       console.log('all sends flushed')
-      sock.unref()
+      sock.close()
     })
   })
 })

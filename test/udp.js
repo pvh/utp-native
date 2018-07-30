@@ -13,6 +13,28 @@ tape('bind', function (t) {
   })
 })
 
+tape('bind, close, bind', function (t) {
+  const sock = utp()
+
+  sock.bind(function () {
+    const { port, address } = sock.address()
+    t.same(address, '0.0.0.0')
+    t.same(typeof port, 'number')
+    t.ok(port > 0 && port < 65536)
+    sock.close(function () {
+      const otherSock = utp()
+
+      otherSock.bind(port, function () {
+        const addr = otherSock.address()
+        t.same(addr.port, port)
+        t.same(addr.address, address)
+        t.end()
+      })
+    })
+  })
+})
+
+
 tape('send message', function (t) {
   const sock = utp()
 

@@ -12,8 +12,6 @@ function UDP () {
   if (!(this instanceof UDP)) return new UDP()
   events.EventEmitter.call(this)
 
-  this.closed = false
-
   this._sending = []
   this._sent = []
   this._offset = 0
@@ -22,6 +20,8 @@ function UDP () {
   this._address = null
   this._inited = false
   this._refed = true
+  this._closing = false
+  this._closed = false
 }
 
 util.inherits(UDP, events.EventEmitter)
@@ -32,7 +32,8 @@ UDP.prototype._init = function () {
   binding.utp_napi_init(this._handle, this,
     this._buffer,
     this._onmessage,
-    this._onsend
+    this._onsend,
+    this._onclose
   )
 
   if (!this._refed) this.unref()
@@ -60,7 +61,7 @@ UDP.prototype.address = function () {
 UDP.prototype.send = function (buf, offset, len, port, host, cb) {
   if (!cb) cb = noop
   if (!isIP(host)) return this._resolveAndSend(buf, offset, len, port, host, cb)
-  if (this.closed) return process.nextTick(cb, new Error('Socket is closed'))
+  if (this._closing) return process.nextTick(cb, new Error('Socket is closed'))
   if (!this._address) this.bind(0)
 
   var send = this._sent.pop()
@@ -89,20 +90,16 @@ UDP.prototype._resolveAndSend = function (buf, offset, len, port, host, cb) {
 }
 
 UDP.prototype.close = function (onclose) {
-  if (this.closed) return
   if (onclose) this.once('close', onclose)
-  this.closed = true
-  if (this._address) binding.utp_napi_close(this._handle)
-  this._destroyMaybe()
+  if (this._closing) return
+  this.closing = true
+  this._closeMaybe()
 }
 
-UDP.prototype._destroyMaybe = function () {
-  if (this._handle && !this._sending.length) {
-    if (this._inited) {
-      binding.utp_napi_destroy(this._handle, this._sent.map(toHandle))
-    }
-    this._handle = null
-    process.nextTick(emitClose, this)
+UDP.prototype._closeMaybe = function () {
+  if (!this._sending.length && this._inited && !this._closed) {
+    this._closed = true
+    binding.utp_napi_close(this._handle)
   }
 }
 
@@ -113,7 +110,7 @@ UDP.prototype.bind = function (port, ip, onlistening) {
   if (!ip) ip = '0.0.0.0'
 
   if (!this._inited) this._init()
-  if (this.closed) return
+  if (this._closing) return
 
   if (this._address) {
     this.emit('error', new Error('Socket already bound'))
@@ -161,9 +158,15 @@ UDP.prototype._onsend = function (send, status) {
   send._callback = send._buffer = null
   set.remove(this._sending, send)
   this._sent.push(send)
-  if (this.closed) this._destroyMaybe()
+  if (this._closing) this._closeMaybe()
 
   cb(status < 0 ? new Error('Send failed (status: ' + status + ')') : null)
+}
+
+UDP.prototype._onclose = function () {
+  binding.utp_napi_destroy(this._handle, this._sent.map(toHandle))
+  this._handle = null
+  this.emit('close')
 }
 
 function SendRequest () {
@@ -185,8 +188,4 @@ function toHandle (obj) {
 
 function emitListening (self) {
   self.emit('listening')
-}
-
-function emitClose (self) {
-  self.emit('close')
 }

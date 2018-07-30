@@ -35,6 +35,7 @@ typedef struct {
   uv_buf_t buf;
   napi_ref on_message;
   napi_ref on_send;
+  napi_ref on_close;
 } utp_napi_t;
 
 typedef struct {
@@ -85,6 +86,15 @@ on_uv_read (uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf, const struct s
 }
 
 static void
+on_uv_close (uv_handle_t *handle) {
+  utp_napi_t *self = (utp_napi_t *) handle->data;
+
+  UTP_NAPI_CALLBACK(self->on_close, {
+    NAPI_MAKE_CALLBACK(env, NULL, ctx, callback, 0, NULL, NULL);
+  })
+}
+
+static void
 on_uv_send (uv_udp_send_t *req, int status) {
   uv_udp_t *handle = req->handle;
   utp_napi_t *self = (utp_napi_t *) handle->data;
@@ -99,7 +109,7 @@ on_uv_send (uv_udp_send_t *req, int status) {
 }
 
 NAPI_METHOD(utp_napi_init) {
-  NAPI_ARGV(5)
+  NAPI_ARGV(6)
   NAPI_ARGV_BUFFER_CAST(utp_napi_t *, self, 0)
 
   self->env = env;
@@ -117,6 +127,7 @@ NAPI_METHOD(utp_napi_init) {
 
   napi_create_reference(env, argv[3], 1, &(self->on_message));
   napi_create_reference(env, argv[4], 1, &(self->on_send));
+  napi_create_reference(env, argv[5], 1, &(self->on_close));
 
   return NULL;
 }
@@ -130,7 +141,7 @@ NAPI_METHOD(utp_napi_close) {
   err = uv_udp_recv_stop(&(self->handle));
   if (err < 0) UTP_NAPI_THROW(err)
 
-  // TODO: do we need to somehow close/unbind the handle also?
+  uv_close((uv_handle_t *) &(self->handle), on_uv_close);
 
   return NULL;
 }
@@ -172,7 +183,7 @@ NAPI_METHOD(utp_napi_bind) {
   err = uv_udp_bind(handle, (const struct sockaddr*) &addr, 0);
   if (err < 0) UTP_NAPI_THROW(err)
 
-  // TODO: more error handling here (close the bind)
+  // TODO: We should close the handle here also if this fails
   err = uv_udp_recv_start(handle, on_uv_alloc, on_uv_read);
   if (err < 0) UTP_NAPI_THROW(err)
 
