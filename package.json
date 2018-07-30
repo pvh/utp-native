@@ -1,0 +1,29 @@
+{
+  "name": "utp-napi",
+  "version": "0.0.0",
+  "description": "utp native backed by n-api",
+  "main": "index.js",
+  "scripts": {
+    "test": "standard && tape test/*.js",
+    "install": "node-gyp-build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mafintosh/utp-napi.git"
+  },
+  "author": "Mathias Buus (@mafintosh)",
+  "license": "MIT",
+  "gypfile": true,
+  "bugs": {
+    "url": "https://github.com/mafintosh/utp-napi/issues"
+  },
+  "homepage": "https://github.com/mafintosh/utp-napi#readme",
+  "dependencies": {
+    "napi-macros": "^1.4.0",
+    "node-gyp-build": "^3.4.0"
+  },
+  "devDependencies": {
+    "standard": "^11.0.1",
+    "tape": "^4.9.1"
+  }
+}
