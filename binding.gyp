@@ -9,7 +9,7 @@
       "deps/libutp",
     ],
     "sources": [
-      "./binding.c",
+      "./binding.cc",
     ],
     'xcode_settings': {
       'OTHER_CFLAGS': [

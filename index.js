@@ -1,4 +1,5 @@
-const binding = require('node-gyp-build')(__dirname)
+const binding = require('./lib/binding')
+const Connection = require('./lib/connection')
 const set = require('unordered-set')
 const util = require('util')
 const events = require('events')
@@ -11,6 +12,8 @@ module.exports = UDP
 function UDP () {
   if (!(this instanceof UDP)) return new UDP()
   events.EventEmitter.call(this)
+
+  this.connections = []
 
   this._sending = []
   this._sent = []
@@ -33,6 +36,7 @@ UDP.prototype._init = function () {
     this._buffer,
     this._onmessage,
     this._onsend,
+    this._onconnection,
     this._onclose
   )
 
@@ -103,6 +107,11 @@ UDP.prototype._closeMaybe = function () {
   }
 }
 
+UDP.prototype.listen = function (port, ip, onlistening) {
+  if (!this._inited) this.bind(port, ip, onlistening)
+  binding.utp_napi_accept_connections(this._handle)
+}
+
 UDP.prototype.bind = function (port, ip, onlistening) {
   if (typeof port === 'function') return this.bind(0, null, port)
   if (typeof ip === 'function') return this.bind(port, null, ip)
@@ -163,6 +172,12 @@ UDP.prototype._onsend = function (send, status) {
   cb(status < 0 ? new Error('Send failed (status: ' + status + ')') : null)
 }
 
+UDP.prototype._onconnection = function (port, addr) {
+  const conn = new Connection(this, port, addr)
+  process.nextTick(emitConnection, this, conn)
+  return conn._handle
+}
+
 UDP.prototype._onclose = function () {
   binding.utp_napi_destroy(this._handle, this._sent.map(toHandle))
   this._handle = null
@@ -188,4 +203,8 @@ function toHandle (obj) {
 
 function emitListening (self) {
   self.emit('listening')
+}
+
+function emitConnection (self, connection) {
+  self.emit('connection', connection)
 }

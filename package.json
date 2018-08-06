@@ -19,7 +19,7 @@
   },
   "homepage": "https://github.com/mafintosh/utp-napi#readme",
   "dependencies": {
-    "napi-macros": "^1.4.0",
+    "napi-macros": "^1.6.0",
     "node-gyp-build": "^3.4.0"
   },
   "devDependencies": {
