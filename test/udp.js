@@ -28,7 +28,7 @@ tape('bind, close, bind', function (t) {
         const addr = otherSock.address()
         t.same(addr.port, port)
         t.same(addr.address, address)
-        t.end()
+        otherSock.close(() => t.end())
       })
     })
   })
