@@ -1,6 +1,5 @@
 const binding = require('./lib/binding')
 const Connection = require('./lib/connection')
-const set = require('unordered-set')
 const util = require('util')
 const events = require('events')
 const dns = require('dns')
@@ -88,7 +87,7 @@ UDP.prototype._resolveAndSend = function (buf, offset, len, port, host, cb) {
 
   function onlookup (err, ip) {
     if (err) return cb(err)
-    if (!ip) return cb(new Error('Could not resolve host'))
+    if (!ip) return cb(new Error('Could not resolve ' + host))
     self.send(buf, offset, len, port, ip, cb)
   }
 }
@@ -101,10 +100,19 @@ UDP.prototype.close = function (onclose) {
 }
 
 UDP.prototype._closeMaybe = function () {
-  if (!this._sending.length && this._inited && !this._closed) {
+  if (this.closing && !this.connections.length && !this._sending.length && this._inited && !this._closed) {
     this._closed = true
     binding.utp_napi_close(this._handle)
   }
+}
+
+UDP.prototype.connect = function (port, ip) {
+  if (!this._inited) this.bind()
+  const conn = new Connection(this, port, ip)
+  if (!ip) ip = '127.0.0.1'
+  if (!isIP(ip)) conn._resolveAndConnect(port, ip)
+  else conn._connect(port, ip || '127.0.0.1')
+  return conn
 }
 
 UDP.prototype.listen = function (port, ip, onlistening) {

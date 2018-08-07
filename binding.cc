@@ -55,14 +55,62 @@ typedef struct {
 } utp_napi_send_request_t;
 
 typedef struct {
-  uint32_t min_packet_size;
-  uint32_t packet_size;
+  uint32_t min_recv_packet_size;
+  uint32_t recv_packet_size;
+
+  struct utp_iovec send_buffer[256];
+  struct utp_iovec *send_buffer_next;
+  uint32_t send_buffer_missing;
+
   utp_socket *socket;
   napi_env env;
   napi_ref ctx;
   uv_buf_t buf;
   napi_ref on_read;
+  napi_ref on_drain;
+  napi_ref on_end;
+  napi_ref on_error;
+  napi_ref on_close;
+  napi_ref on_connect;
 } utp_napi_connection_t;
+
+static int
+utp_napi_connection_drain (utp_napi_connection_t *self) {
+
+  struct utp_iovec *next = self->send_buffer_next;
+  uint32_t missing = self->send_buffer_missing;
+
+  if (!missing) return 1;
+
+  int sent_bytes = utp_writev(self->socket, next, missing);
+  if (sent_bytes < 0) {
+    UTP_NAPI_CALLBACK(self->on_error, {
+      napi_value argv[1];
+      napi_create_int32(env, sent_bytes, &(argv[0]));
+      NAPI_MAKE_CALLBACK(env, NULL, ctx, callback, 1, argv, NULL)
+    })
+    return 0;
+  }
+
+  size_t bytes = sent_bytes;
+
+  while (bytes > 0) {
+    if (next->iov_len <= bytes) {
+      bytes -= next->iov_len;
+      next++;
+      missing--;
+    } else {
+      next->iov_len -= bytes;
+      next->iov_base = ((char *) next->iov_base) + bytes;
+      break;
+    }
+  }
+
+  self->send_buffer_missing = missing;
+  self->send_buffer_next = next;
+
+  return missing ? 0 : 1;
+}
 
 static void
 utp_napi_parse_address (struct sockaddr *name, char *ip, int *port) {
@@ -86,6 +134,8 @@ on_uv_alloc (uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
 static void
 on_uv_read (uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf, const struct sockaddr *addr, unsigned flags) {
   utp_napi_t *self = (utp_napi_t *) handle->data;
+
+  utp_check_timeouts(self->utp);
 
   if (nread == 0) {
     utp_issue_deferred_acks(self->utp);
@@ -144,7 +194,45 @@ on_utp_firewall (utp_callback_arguments *a) {
 
 static uint64
 on_utp_state_change (utp_callback_arguments *a) {
-  printf("on_utp_statechange\n");
+  utp_napi_connection_t *self = (utp_napi_connection_t *) utp_get_userdata(a->socket);
+
+  switch (a->state) {
+    case UTP_STATE_CONNECT: {
+      UTP_NAPI_CALLBACK(self->on_connect, {
+        NAPI_MAKE_CALLBACK(env, NULL, ctx, callback, 0, NULL, NULL)
+      })
+      break;
+    }
+
+    case UTP_STATE_WRITABLE: {
+      if (utp_napi_connection_drain(self)) {
+        UTP_NAPI_CALLBACK(self->on_drain, {
+          NAPI_MAKE_CALLBACK(env, NULL, ctx, callback, 0, NULL, NULL)
+        })
+      }
+      break;
+    }
+
+    case UTP_STATE_EOF: {
+      UTP_NAPI_CALLBACK(self->on_end, {
+        NAPI_MAKE_CALLBACK(env, NULL, ctx, callback, 0, NULL, NULL)
+      })
+      break;
+    }
+
+    case UTP_STATE_DESTROYING: {
+      UTP_NAPI_CALLBACK(self->on_close, {
+        NAPI_MAKE_CALLBACK(env, NULL, ctx, callback, 0, NULL, NULL)
+      })
+      break;
+    }
+
+    default: {
+      printf("on_utp_statechange (unkown state: %i)\n", a->state);
+      break;
+    }
+  }
+
   return 0;
 }
 
@@ -177,7 +265,14 @@ on_utp_accept (utp_callback_arguments *a) {
 
 static uint64
 on_utp_error (utp_callback_arguments *a) {
-  printf("on_utp_error\n");
+  utp_napi_connection_t *self = (utp_napi_connection_t *) utp_get_userdata(a->socket);
+  
+  UTP_NAPI_CALLBACK(self->on_error, {
+    napi_value argv[1];
+    napi_create_int32(env, a->error_code, &(argv[0]));
+    NAPI_MAKE_CALLBACK(env, NULL, ctx, callback, 1, argv, NULL)
+  })
+
   return 0;
 }
 
@@ -186,17 +281,17 @@ on_utp_read (utp_callback_arguments *a) {
   utp_napi_connection_t *self = (utp_napi_connection_t *) utp_get_userdata(a->socket);
 
   memcpy(self->buf.base, a->buf, a->len);
-  self->packet_size += a->len;
+  self->recv_packet_size += a->len;
 
-  if (self->packet_size < self->min_packet_size) return 0;
+  if (self->recv_packet_size < self->min_recv_packet_size) return 0;
 
   UTP_NAPI_CALLBACK(self->on_read, {
     napi_value ret;
     napi_value argv[1];
-    napi_create_uint32(env, self->packet_size, &(argv[0]));
+    napi_create_uint32(env, self->recv_packet_size, &(argv[0]));
     NAPI_MAKE_CALLBACK(env, NULL, ctx, callback, 1, argv, &ret)
-    UTP_NAPI_BUFFER_ALLOC(self, ret, self->packet_size)
-    self->packet_size = 0;
+    UTP_NAPI_BUFFER_ALLOC(self, ret, self->recv_packet_size)
+    self->recv_packet_size = 0;
   })
 
   return 0;
@@ -411,7 +506,7 @@ NAPI_METHOD(utp_napi_unref) {
 }
 
 NAPI_METHOD(utp_napi_connection_init) {
-  NAPI_ARGV(4)
+  NAPI_ARGV(9)
   NAPI_ARGV_BUFFER_CAST(utp_napi_connection_t *, self, 0)
 
   self->env = env;
@@ -423,6 +518,79 @@ NAPI_METHOD(utp_napi_connection_init) {
   self->buf.len = buf_len;
 
   napi_create_reference(env, argv[3], 1, &(self->on_read));
+  napi_create_reference(env, argv[4], 1, &(self->on_drain));
+  napi_create_reference(env, argv[5], 1, &(self->on_end));
+  napi_create_reference(env, argv[6], 1, &(self->on_error));
+  napi_create_reference(env, argv[7], 1, &(self->on_close));
+  napi_create_reference(env, argv[8], 1, &(self->on_connect));
+
+  return NULL;
+}
+
+NAPI_METHOD(utp_napi_connection_write) {
+  NAPI_ARGV(2)
+  NAPI_ARGV_BUFFER_CAST(utp_napi_connection_t *, self, 0)
+  NAPI_ARGV_BUFFER(buf, 1)
+
+  self->send_buffer_next = self->send_buffer;
+  self->send_buffer_next->iov_base = buf;
+  self->send_buffer_next->iov_len = buf_len;
+  self->send_buffer_missing = 1;
+
+  int drained = utp_napi_connection_drain(self);
+  NAPI_RETURN_UINT32(drained)
+}
+
+NAPI_METHOD(utp_napi_connection_writev) {
+  NAPI_ARGV(2)
+  NAPI_ARGV_BUFFER_CAST(utp_napi_connection_t *, self, 0)
+
+  napi_value bufs = argv[1];
+  struct utp_iovec *next = self->send_buffer_next = self->send_buffer;
+
+  NAPI_FOR_EACH(bufs, el) {
+    NAPI_BUFFER(buf, el)
+
+    next->iov_base = buf;
+    next->iov_len = buf_len;
+    next++;
+  }
+
+  self->send_buffer_missing = bufs_len;
+
+  int drained = utp_napi_connection_drain(self);
+  NAPI_RETURN_UINT32(drained)
+}
+
+NAPI_METHOD(utp_napi_connection_close) {
+  NAPI_ARGV(1)
+  NAPI_ARGV_BUFFER_CAST(utp_napi_connection_t *, self, 0)
+
+  utp_close(self->socket);
+
+  return NULL;
+}
+
+NAPI_METHOD(utp_napi_connect) {
+  NAPI_ARGV(4)
+  NAPI_ARGV_BUFFER_CAST(utp_napi_t *, self, 0)
+  NAPI_ARGV_BUFFER_CAST(utp_napi_connection_t *, conn, 1)
+  NAPI_ARGV_UINT32(port, 2)
+  NAPI_ARGV_UTF8(ip, 17, 3)
+
+  int err;
+  struct sockaddr_in addr;
+
+  // TODO: error handle
+  conn->socket = utp_create_socket(self->utp);
+
+  utp_set_userdata(conn->socket, conn);
+
+  err = uv_ip4_addr((char *) &ip, port, &addr);
+  if (err) UTP_NAPI_THROW(err)
+
+  // TODO: error handle
+  utp_connect(conn->socket, (struct sockaddr *) &addr, sizeof(struct sockaddr_in));
 
   return NULL;
 }
@@ -442,4 +610,8 @@ NAPI_INIT() {
   NAPI_EXPORT_FUNCTION(utp_napi_ref)
   NAPI_EXPORT_FUNCTION(utp_napi_unref)
   NAPI_EXPORT_FUNCTION(utp_napi_connection_init)
+  NAPI_EXPORT_FUNCTION(utp_napi_connection_write)
+  NAPI_EXPORT_FUNCTION(utp_napi_connection_writev)
+  NAPI_EXPORT_FUNCTION(utp_napi_connection_close)
+  NAPI_EXPORT_FUNCTION(utp_napi_connect)
 }

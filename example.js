@@ -1,4 +1,5 @@
 const udp = require('./')
+const fs = require('fs')
 
 const sock = udp()
 const speed = require('speedometer')()
@@ -10,9 +11,17 @@ sock.on('close', function () {
 })
 
 sock.on('connection', function (connection) {
-  console.log('new connection')
+  console.log('(new connection)')
+  const data = Buffer.alloc(655360)
+  fs.createReadStream('/dev/zero').pipe(connection)
   connection.on('data', function (data) {
-    console.log('ondata', data.length, p(speed(data.length)))
+    // console.log('ondata', data.length, p(speed(data.length)))
+  })
+  connection.on('end', function () {
+    console.log('onend')
+  })
+  connection.on('close', function () {
+    console.log('fully closed')
   })
 })
 
@@ -22,10 +31,24 @@ sock.on('message', function (buf, rinfo) {
 })
 
 sock.listen(8080, 'localhost')
-sock.on('listening', function () {
-  const { port } = sock.address()
+if (process.argv.indexOf('--connect') > -1) sock.on('listening', connect)
 
-  console.log('listening', port)
+function connect () {
+  const sock = udp()
+  const c = sock.connect(8080)
+  c.setPacketSize(65536)
+  const speed = require('speedometer')()
+  c.on('data', function (data) {
+    speed(data.length)
+  })
+  c.on('connect', function () { 
+    console.log('connected')
+  })
+  c.write('hi')
+
+  setInterval(function () {
+    console.log(p(speed()))
+  }, 1000)
 
   return
   sock.send(Buffer.from('hello'), 0, 5, port, '127.0.0.1', function loop () {
@@ -34,4 +57,4 @@ sock.on('listening', function () {
       sock.close()
     })
   })
-})
+}
