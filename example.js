@@ -4,13 +4,22 @@ const fs = require('fs')
 const sock = udp()
 const speed = require('speedometer')()
 const p = require('prettier-bytes')
+
 var read = 0
+
+const listening = process.argv.indexOf('-l') > -1
+const connecting = process.argv.indexOf('-c') > -1
+const i = process.argv.indexOf('-p')
+const ps = i === -1 ? 0 : Number(process.argv[i + 1])
+
+sock.on('error', console.error)
 
 sock.on('close', function () {
   console.log('socket fully closed')
 })
 
 sock.on('connection', function (connection) {
+  connection.on('error', console.error)
   console.log('(new connection)')
   const data = Buffer.alloc(655360)
   fs.createReadStream('/dev/zero').pipe(connection)
@@ -30,24 +39,31 @@ sock.on('message', function (buf, rinfo) {
   console.log(buf, read, rinfo)
 })
 
-sock.listen(8080, 'localhost')
-if (process.argv.indexOf('--connect') > -1) sock.on('listening', connect)
+if (listening) sock.listen(8080, 'localhost')
+if (listening && connecting) sock.on('listening', connect)
+else if (connecting) connect()
 
 function connect () {
   const sock = udp()
+  var total = 0
+  var tick = 0
+  var packs = 0
   const c = sock.connect(8080)
-  c.setPacketSize(65536)
+  c.on('error', console.error)
+  c.setPacketSize(ps)
   const speed = require('speedometer')()
   c.on('data', function (data) {
+    packs++
+    total += data.length
     speed(data.length)
   })
   c.on('connect', function () { 
     console.log('connected')
   })
-  c.write('hi')
+  c.write('hi\n')
 
   setInterval(function () {
-    console.log(p(speed()))
+    console.log(p(total) + ' ' + p(speed()) + ' ' + packs + ' ' + (++tick))
   }, 1000)
 
   return

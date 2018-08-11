@@ -135,6 +135,8 @@ static void
 on_uv_read (uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf, const struct sockaddr *addr, unsigned flags) {
   utp_napi_t *self = (utp_napi_t *) handle->data;
 
+  // TODO: is this overkill to call here?
+  // we do it because ucat.c does it
   utp_check_timeouts(self->utp);
 
   if (nread == 0) {
