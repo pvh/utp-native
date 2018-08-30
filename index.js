@@ -2,7 +2,7 @@ var events = require('events')
 var util = require('util')
 var timers = require('./timers')
 var stream = require('readable-stream')
-var utp = require('node-gyp-build')(__dirname)
+var utp = require('./utp')
 var net = require('net')
 var dns = require('dns')
 

@@ -6,7 +6,7 @@
   "gypfile": true,
   "scripts": {
     "test-timeouts": "tape test/timeouts.js",
-    "test": "standard && tape test/socket-api.js test/net-api.js",
+    "test": "tape test/socket-api.js test/net-api.js",
     "prebuild": "prebuildify --all --strip",
     "prebuild-ia32": "prebuildify --all --strip --arch=ia32",
     "install": "node-gyp-build"
